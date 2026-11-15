@@ -52,8 +52,8 @@ jobs:
                   applicationId "com.example.cachecleaner"
                   minSdk 26
                   targetSdk 28
-                  versionCode 2
-                  versionName "1.1"
+                  versionCode 3
+                  versionName "1.2"
               }
               buildTypes {
                   release { minifyEnabled false }
@@ -80,7 +80,7 @@ jobs:
                   android:label="پاک‌ساز کش لنوو"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.AppCompat.Light.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -105,11 +105,10 @@ jobs:
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
               android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews"
+              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
               android:canPerformGestures="true"
               android:canRetrieveWindowContent="true"
-              android:notificationTimeout="100"
-              android:packageNames="com.android.settings" />
+              android:notificationTimeout="100" />
           EOF
 
           cat << 'EOF' > app/src/main/res/layout/activity_main.xml
@@ -122,12 +121,21 @@ jobs:
               android:layoutDirection="rtl"
               android:orientation="vertical"
               android:padding="20dp">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="پاک‌ساز سریع کش تبلت" android:textColor="#1E293B" android:textSize="22sp" android:textStyle="bold" />
-              <LinearLayout android:layout_width="200dp" android:layout_height="200dp" android:layout_marginTop="24dp" android:background="@android:drawable/dialog_holo_light_frame" android:gravity="center" android:orientation="vertical">
-                  <TextView android:id="@+id/tvTotalCache" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 MB" android:textColor="#0284C7" android:textSize="32sp" android:textStyle="bold" />
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="پاک‌ساز سریع کش تبلت (v1.2)" android:textColor="#1E293B" android:textSize="20sp" android:textStyle="bold" />
+              <LinearLayout android:layout_width="190dp" android:layout_height="190dp" android:layout_marginTop="20dp" android:background="@android:drawable/dialog_holo_light_frame" android:gravity="center" android:orientation="vertical">
+                  <TextView android:id="@+id/tvTotalCache" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0 MB" android:textColor="#0284C7" android:textSize="30sp" android:textStyle="bold" />
                   <TextView android:id="@+id/tvAppCount" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="آماده محاسبه" android:textColor="#64748B" android:textSize="14sp" />
               </LinearLayout>
-              <TextView android:id="@+id/tvStatus" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="20dp" android:layout_weight="1" android:gravity="center" android:text="برای شروع، ابتدا کش برنامه‌ها را محاسبه کنید." android:textColor="#334155" android:textSize="15sp" />
+              <CheckBox
+                  android:id="@+id/cbSkipBale"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="16dp"
+                  android:checked="true"
+                  android:text="نادیده گرفتن برنامه «بله» (جلوگیری از هنگ)"
+                  android:textColor="#334155"
+                  android:textSize="14sp" />
+              <TextView android:id="@+id/tvStatus" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="12dp" android:layout_weight="1" android:gravity="center" android:text="برای شروع، ابتدا کش برنامه‌ها را محاسبه کنید." android:textColor="#334155" android:textSize="15sp" />
               <Button android:id="@+id/btnScan" android:layout_width="match_parent" android:layout_height="55dp" android:backgroundTint="#0284C7" android:text="۱. محاسبه حافظه کش" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" />
               <Button android:id="@+id/btnClean" android:layout_width="match_parent" android:layout_height="55dp" android:layout_marginTop="10dp" android:backgroundTint="#16A34A" android:enabled="false" android:text="۲. پاک‌سازی خودکار همه کش‌ها" android:textColor="#FFFFFF" android:textSize="16sp" android:textStyle="bold" />
           </LinearLayout>
@@ -137,63 +145,178 @@ jobs:
           package com.example.cachecleaner
 
           import android.accessibilityservice.AccessibilityService
+          import android.accessibilityservice.GestureDescription
+          import android.content.Intent
+          import android.graphics.Path
+          import android.graphics.Rect
+          import android.net.Uri
           import android.os.Handler
           import android.os.Looper
           import android.view.accessibility.AccessibilityEvent
           import android.view.accessibility.AccessibilityNodeInfo
 
           class CacheClearService : AccessibilityService() {
+
               companion object {
-                  var isCleaning = false
-                  var onAppCleaned: (() -> Unit)? = null
+                  var instance: CacheClearService? = null
+                  var isRunning = false
+                  var onFinished: (() -> Unit)? = null
               }
+
               private val handler = Handler(Looper.getMainLooper())
-              private var step = 0
+              private var queue = mutableListOf<String>()
+              private var currentIndex = 0
+              private var step = 0 // 0: wait for Storage, 1: wait for Clear Cache, 2: wait after click
 
-              override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-                  if (!isCleaning) return
-                  val rootNode = rootInActiveWindow ?: return
+              private val storageWords = listOf(
+                  "Storage", "STORAGE", "Storage & cache",
+                  "حافظه", "محل ذخیره", "فضای ذخیره‌سازی", "ذخیره‌سازی", "ذخیره سازی", "حافظه و کش"
+              )
 
-                  val clearCacheWords = listOf("Clear cache", "CLEAR CACHE", "پاک کردن حافظه پنهان", "پاک کردن کش", "پاکسازی حافظه پنهان", "پاک کردن داده‌های پنهان", "پاک کردن داده های پنهان")
-                  val storageWords = listOf("Storage", "STORAGE", "حافظه", "فضای ذخیره‌سازی", "محل ذخیره", "ذخیره سازی", "محل ذخیره و حافظه پنهان")
+              private val clearCacheWords = listOf(
+                  "Clear cache", "CLEAR CACHE",
+                  "پاک کردن حافظه پنهان", "پاک کردن کش", "پاکسازی حافظه پنهان",
+                  "پاک‌سازی حافظه پنهان", "پاک کردن داده‌های پنهان", "پاک کردن داده های پنهان"
+              )
 
-                  if (findAndClick(rootNode, clearCacheWords)) {
-                      isCleaning = false
-                      step = 0
-                      handler.postDelayed({
-                          performGlobalAction(GLOBAL_ACTION_BACK)
-                          handler.postDelayed({
-                              performGlobalAction(GLOBAL_ACTION_BACK)
-                              onAppCleaned?.invoke()
-                          }, 500)
-                      }, 500)
+              private val timeoutRunnable = Runnable {
+                  if (isRunning) {
+                      moveToNextApp()
+                  }
+              }
+
+              private val pollRunnable = object : Runnable {
+                  override fun run() {
+                      if (!isRunning) return
+                      checkScreenAndAct()
+                      handler.postDelayed(this, 450)
+                  }
+              }
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  instance = this
+              }
+
+              override fun onDestroy() {
+                  super.onDestroy()
+                  if (instance == this) instance = null
+              }
+
+              fun startBatchClean(packages: List<String>) {
+                  queue.clear()
+                  queue.addAll(packages)
+                  currentIndex = 0
+                  isRunning = true
+                  openCurrentAppSettings()
+              }
+
+              private fun openCurrentAppSettings() {
+                  if (currentIndex >= queue.size) {
+                      isRunning = false
+                      handler.removeCallbacks(timeoutRunnable)
+                      handler.removeCallbacks(pollRunnable)
+                      // بازگشت به صفحه اصلی برنامه خودمان
+                      val intent = Intent(this, MainActivity::class.java).apply {
+                          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                      }
+                      startActivity(intent)
+                      onFinished?.invoke()
                       return
                   }
 
-                  if (step == 0 && findAndClick(rootNode, storageWords)) {
-                      step = 1
+                  val pkg = queue[currentIndex]
+                  step = 0
+
+                  val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                      data = Uri.parse("package:$pkg")
+                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                   }
+                  startActivity(intent)
+
+                  handler.removeCallbacks(timeoutRunnable)
+                  handler.postDelayed(timeoutRunnable, 5000)
+
+                  handler.removeCallbacks(pollRunnable)
+                  handler.postDelayed(pollRunnable, 600)
               }
 
-              private fun findAndClick(root: AccessibilityNodeInfo, targets: List<String>): Boolean {
-                  for (text in targets) {
-                      val nodes = root.findAccessibilityNodeInfosByText(text)
-                      if (nodes != null) {
-                          for (node in nodes) {
-                              var current: AccessibilityNodeInfo? = node
-                              while (current != null) {
-                                  if (current.isClickable && current.isEnabled) {
-                                      current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                                      return true
-                                  }
-                                  current = current.parent
+              private fun checkScreenAndAct() {
+                  val root = rootInActiveWindow ?: return
+
+                  // اول بررسی کن آیا دکمه پاک کردن کش در همین صفحه وجود دارد؟
+                  val cacheNode = findNode(root, clearCacheWords)
+                  if (cacheNode != null && step != 2) {
+                      step = 2
+                      clickNodeOrTap(cacheNode)
+                      cacheNode.recycle()
+                      handler.removeCallbacks(timeoutRunnable)
+                      handler.removeCallbacks(pollRunnable)
+                      handler.postDelayed({ moveToNextApp() }, 700)
+                      root.recycle()
+                      return
+                  }
+
+                  // اگر در مرحله اول هستیم، دنبال گزینه Storage (حافظه) بگرد و واردش شو
+                  if (step == 0) {
+                      val storageNode = findNode(root, storageWords)
+                      if (storageNode != null) {
+                          step = 1
+                          clickNodeOrTap(storageNode)
+                          storageNode.recycle()
+                      }
+                  }
+                  root.recycle()
+              }
+
+              private fun moveToNextApp() {
+                  handler.removeCallbacks(timeoutRunnable)
+                  handler.removeCallbacks(pollRunnable)
+                  currentIndex++
+                  openCurrentAppSettings()
+              }
+
+              private fun findNode(root: AccessibilityNodeInfo, words: List<String>): AccessibilityNodeInfo? {
+                  for (w in words) {
+                      val list = root.findAccessibilityNodeInfosByText(w)
+                      if (!list.isNullOrEmpty()) {
+                          for (node in list) {
+                              val text = node.text?.toString() ?: ""
+                              val desc = node.contentDescription?.toString() ?: ""
+                              if (text.contains(w, ignoreCase = true) || desc.contains(w, ignoreCase = true)) {
+                                  return node
                               }
                           }
                       }
                   }
-                  return false
+                  return null
               }
-              override fun onInterrupt() { isCleaning = false }
+
+              private fun clickNodeOrTap(node: AccessibilityNodeInfo) {
+                  var current: AccessibilityNodeInfo? = node
+                  while (current != null) {
+                      if (current.isClickable && current.isEnabled) {
+                          if (current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                              return
+                          }
+                      }
+                      current = current.parent
+                  }
+
+                  // اگر کلیک معمولی کار نکرد، مستقیماً روی مختصات دکمه در صفحه تبلت ضربه بزن
+                  val rect = Rect()
+                  node.getBoundsInScreen(rect)
+                  if (!rect.isEmpty && rect.centerX() > 0 && rect.centerY() > 0) {
+                      val path = Path().apply { moveTo(rect.centerX().toFloat(), rect.centerY().toFloat()) }
+                      val gesture = GestureDescription.Builder()
+                          .addStroke(GestureDescription.StrokeDescription(path, 0, 80))
+                          .build()
+                      dispatchGesture(gesture, null, null)
+                  }
+              }
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+              override fun onInterrupt() { isRunning = false }
           }
           EOF
 
@@ -205,7 +328,6 @@ jobs:
           import android.content.Context
           import android.content.Intent
           import android.content.pm.PackageManager
-          import android.net.Uri
           import android.os.Bundle
           import android.os.Handler
           import android.os.Looper
@@ -214,6 +336,7 @@ jobs:
           import android.provider.Settings
           import android.text.format.Formatter
           import android.widget.Button
+          import android.widget.CheckBox
           import android.widget.TextView
           import androidx.appcompat.app.AppCompatActivity
           import kotlin.concurrent.thread
@@ -222,10 +345,10 @@ jobs:
               private lateinit var tvTotalCache: TextView
               private lateinit var tvAppCount: TextView
               private lateinit var tvStatus: TextView
+              private lateinit var cbSkipBale: CheckBox
               private lateinit var btnScan: Button
               private lateinit var btnClean: Button
               private val appsWithCache = mutableListOf<String>()
-              private var currentCleaningIndex = 0
               private val mainHandler = Handler(Looper.getMainLooper())
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -235,6 +358,7 @@ jobs:
                   tvTotalCache = findViewById(R.id.tvTotalCache)
                   tvAppCount = findViewById(R.id.tvAppCount)
                   tvStatus = findViewById(R.id.tvStatus)
+                  cbSkipBale = findViewById(R.id.cbSkipBale)
                   btnScan = findViewById(R.id.btnScan)
                   btnClean = findViewById(R.id.btnClean)
 
@@ -246,10 +370,22 @@ jobs:
                   }
 
                   btnClean.setOnClickListener {
-                      if (!isAccessibilityEnabled()) {
-                          tvStatus.text = "لطفاً سرویس را در Accessibility فعال کنید."
+                      val service = CacheClearService.instance
+                      if (!isAccessibilityEnabled() || service == null) {
+                          tvStatus.text = "لطفاً سرویس «پاک‌سازی خودکار کش» را در Accessibility خاموش و دوباره روشن کنید."
                           startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                      } else { startBatchCleaning() }
+                      } else {
+                          btnScan.isEnabled = false
+                          btnClean.isEnabled = false
+                          tvStatus.text = "در حال پاک‌سازی خودکار... لطفاً صبر کنید."
+                          CacheClearService.onFinished = {
+                              mainHandler.post {
+                                  tvStatus.text = "پاک‌سازی تمام شد! در حال محاسبه مجدد..."
+                                  scanCaches()
+                              }
+                          }
+                          service.startBatchClean(appsWithCache)
+                      }
                   }
               }
 
@@ -258,6 +394,7 @@ jobs:
                   btnClean.isEnabled = false
                   tvStatus.text = "در حال اسکن حافظه پنهان برنامه‌ها..."
                   appsWithCache.clear()
+                  val skipBale = cbSkipBale.isChecked
 
                   thread {
                       val storageStatsManager = getSystemService(Context.STORAGE_STATS_SERVICE) as StorageStatsManager
@@ -265,12 +402,15 @@ jobs:
                       var totalCacheBytes = 0L
 
                       for (app in packages) {
-                          if (app.packageName == packageName || app.packageName == "com.android.settings") continue
+                          val pkg = app.packageName
+                          if (pkg == packageName || pkg == "com.android.settings" || pkg == "com.android.systemui") continue
+                          if (skipBale && (pkg.contains("bale", ignoreCase = true) || pkg == "ir.nasim")) continue
+
                           try {
-                              val stats = storageStatsManager.queryStatsForPackage(StorageManager.UUID_DEFAULT, app.packageName, Process.myUserHandle())
+                              val stats = storageStatsManager.queryStatsForPackage(StorageManager.UUID_DEFAULT, pkg, Process.myUserHandle())
                               if (stats.cacheBytes > 100 * 1024) {
                                   totalCacheBytes += stats.cacheBytes
-                                  appsWithCache.add(app.packageName)
+                                  appsWithCache.add(pkg)
                               }
                           } catch (e: Exception) { }
                       }
@@ -287,49 +427,12 @@ jobs:
                   }
               }
 
-              private fun startBatchCleaning() {
-                  currentCleaningIndex = 0
-                  btnScan.isEnabled = false
-                  btnClean.isEnabled = false
-                  CacheClearService.onAppCleaned = {
-                      currentCleaningIndex++
-                      cleanNextApp()
-                  }
-                  cleanNextApp()
-              }
-
-              private fun cleanNextApp() {
-                  if (currentCleaningIndex >= appsWithCache.size) {
-                      CacheClearService.isCleaning = false
-                      tvStatus.text = "عملیات تمام شد! یکبار دیگر روی محاسبه بزنید."
-                      btnScan.isEnabled = true
-                      return
-                  }
-
-                  val pkg = appsWithCache[currentCleaningIndex]
-                  tvStatus.text = "در حال پاک‌سازی (${currentCleaningIndex + 1} از ${appsWithCache.size}):\n$pkg"
-                  CacheClearService.isCleaning = true
-
-                  val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                      data = Uri.parse("package:$pkg")
-                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                  }
-                  startActivity(intent)
-
-                  // افزایش تایم‌اوت به ۶ ثانیه برای برنامه‌های سنگین روی تبلت‌های ضعیف‌تر
-                  mainHandler.postDelayed({
-                      if (CacheClearService.isCleaning) {
-                          CacheClearService.isCleaning = false
-                          currentCleaningIndex++
-                          cleanNextApp()
-                      }
-                  }, 6000)
-              }
               private fun hasUsageStatsPermission(): Boolean {
                   val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
                   val mode = appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), packageName)
                   return mode == AppOpsManager.MODE_ALLOWED
               }
+
               private fun isAccessibilityEnabled(): Boolean {
                   val prefString = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
                   return prefString?.contains("$packageName/${CacheClearService::class.java.name}") == true
