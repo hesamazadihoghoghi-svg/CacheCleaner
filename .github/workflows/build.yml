@@ -1,0 +1,474 @@
+name: Build Lenovo Tab M7 Cache Cleaner APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Complete Android Project
+        run: |
+          mkdir -p app/src/main/java/com/example/cachecleaner
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/xml
+
+          # 1. settings.gradle
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "CacheCleaner"
+          include ':app'
+          EOF
+
+          # 2. Root build.gradle
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+          }
+          EOF
+
+          # 3. gradle.properties
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+
+          # 4. App build.gradle (Targeted for Android 9 / SDK 28+)
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.example.cachecleaner'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.example.cachecleaner"
+                  minSdk 26
+                  targetSdk 28
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = '1.8'
+              }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+          }
+          EOF
+
+          # 5. AndroidManifest.xml
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:tools="http://schemas.android.com/tools">
+
+              <uses-permission
+                  android:name="android.permission.PACKAGE_USAGE_STATS"
+                  tools:ignore="ProtectedPermissions" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="پاک‌ساز کش لنوو"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".CacheClearService"
+                      android:exported="true"
+                      android:label="سرویس پاک‌سازی خودکار کش"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          # 6. accessibility_service_config.xml
+          cat << 'EOF' > app/src/main/res/xml/accessibility_service_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews"
+              android:canPerformGestures="true"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="100"
+              android:packageNames="com.android.settings" />
+          EOF
+
+          # 7. activity_main.xml
+          cat << 'EOF' > app/src/main/res/layout/activity_main.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="#F5F7FA"
+              android:gravity="center_horizontal"
+              android:layoutDirection="rtl"
+              android:orientation="vertical"
+              android:padding="20dp">
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="16dp"
+                  android:text="پاک‌ساز سریع کش تبلت"
+                  android:textColor="#1E293B"
+                  android:textSize="22sp"
+                  android:textStyle="bold" />
+
+              <LinearLayout
+                  android:layout_width="200dp"
+                  android:layout_height="200dp"
+                  android:layout_marginTop="24dp"
+                  android:background="@android:drawable/dialog_holo_light_frame"
+                  android:gravity="center"
+                  android:orientation="vertical">
+
+                  <TextView
+                      android:id="@+id/tvTotalCache"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="0 MB"
+                      android:textColor="#0284C7"
+                      android:textSize="32sp"
+                      android:textStyle="bold" />
+
+                  <TextView
+                      android:id="@+id/tvAppCount"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_marginTop="8dp"
+                      android:text="آماده محاسبه"
+                      android:textColor="#64748B"
+                      android:textSize="14sp" />
+              </LinearLayout>
+
+              <TextView
+                  android:id="@+id/tvStatus"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_marginTop="20dp"
+                  android:layout_weight="1"
+                  android:gravity="center"
+                  android:text="برای شروع، ابتدا کش برنامه‌ها را محاسبه کنید."
+                  android:textColor="#334155"
+                  android:textSize="15sp" />
+
+              <Button
+                  android:id="@+id/btnScan"
+                  android:layout_width="match_parent"
+                  android:layout_height="55dp"
+                  android:backgroundTint="#0284C7"
+                  android:text="۱. محاسبه حافظه کش"
+                  android:textColor="#FFFFFF"
+                  android:textSize="16sp"
+                  android:textStyle="bold" />
+
+              <Button
+                  android:id="@+id/btnClean"
+                  android:layout_width="match_parent"
+                  android:layout_height="55dp"
+                  android:layout_marginTop="10dp"
+                  android:backgroundTint="#16A34A"
+                  android:enabled="false"
+                  android:text="۲. پاک‌سازی خودکار همه کش‌ها"
+                  android:textColor="#FFFFFF"
+                  android:textSize="16sp"
+                  android:textStyle="bold" />
+          </LinearLayout>
+          EOF
+
+          # 8. CacheClearService.kt
+          cat << 'EOF' > app/src/main/java/com/example/cachecleaner/CacheClearService.kt
+          package com.example.cachecleaner
+
+          import android.accessibilityservice.AccessibilityService
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+
+          class CacheClearService : AccessibilityService() {
+
+              companion object {
+                  var isCleaning = false
+                  var onAppCleaned: (() -> Unit)? = null
+              }
+
+              private val handler = Handler(Looper.getMainLooper())
+              private var step = 0
+
+              override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+                  if (!isCleaning) return
+                  val rootNode = rootInActiveWindow ?: return
+
+                  val clearCacheWords = listOf("Clear cache", "CLEAR CACHE", "پاک کردن حافظه پنهان", "پاک کردن کش")
+                  val storageWords = listOf("Storage", "STORAGE", "حافظه", "فضای ذخیره‌سازی")
+
+                  if (findAndClick(rootNode, clearCacheWords)) {
+                      isCleaning = false
+                      step = 0
+                      handler.postDelayed({
+                          performGlobalAction(GLOBAL_ACTION_BACK)
+                          handler.postDelayed({
+                              performGlobalAction(GLOBAL_ACTION_BACK)
+                              onAppCleaned?.invoke()
+                          }, 400)
+                      }, 400)
+                      return
+                  }
+
+                  if (step == 0 && findAndClick(rootNode, storageWords)) {
+                      step = 1
+                  }
+              }
+
+              private fun findAndClick(root: AccessibilityNodeInfo, targets: List<String>): Boolean {
+                  for (text in targets) {
+                      val nodes = root.findAccessibilityNodeInfosByText(text)
+                      if (nodes != null) {
+                          for (node in nodes) {
+                              var current: AccessibilityNodeInfo? = node
+                              while (current != null) {
+                                  if (current.isClickable && current.isEnabled) {
+                                      current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                      return true
+                                  }
+                                  current = current.parent
+                              }
+                          }
+                      }
+                  }
+                  return false
+              }
+
+              override fun onInterrupt() {
+                  isCleaning = false
+              }
+          }
+          EOF
+
+          # 9. MainActivity.kt
+          cat << 'EOF' > app/src/main/java/com/example/cachecleaner/MainActivity.kt
+          package com.example.cachecleaner
+
+          import android.app.AppOpsManager
+          import android.app.usage.StorageStatsManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.net.Uri
+          import android.os.Bundle
+          import android.os.Handler
+          import android.os.Looper
+          import android.os.Process
+          import android.os.storage.StorageManager
+          import android.provider.Settings
+          import android.text.format.Formatter
+          import android.widget.Button
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import kotlin.concurrent.thread
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var tvTotalCache: TextView
+              private lateinit var tvAppCount: TextView
+              private lateinit var tvStatus: TextView
+              private lateinit var btnScan: Button
+              private lateinit var btnClean: Button
+
+              private val appsWithCache = mutableListOf<String>()
+              private var currentCleaningIndex = 0
+              private val mainHandler = Handler(Looper.getMainLooper())
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  tvTotalCache = findViewById(R.id.tvTotalCache)
+                  tvAppCount = findViewById(R.id.tvAppCount)
+                  tvStatus = findViewById(R.id.tvStatus)
+                  btnScan = findViewById(R.id.btnScan)
+                  btnClean = findViewById(R.id.btnClean)
+
+                  btnScan.setOnClickListener {
+                      if (!hasUsageStatsPermission()) {
+                          tvStatus.text = "لطفاً دسترسی Usage Access را به برنامه بدهید."
+                          startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                      } else {
+                          scanCaches()
+                      }
+                  }
+
+                  btnClean.setOnClickListener {
+                      if (!isAccessibilityEnabled()) {
+                          tvStatus.text = "لطفاً سرویس «پاک‌سازی خودکار کش» را در Accessibility فعال کنید."
+                          startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                      } else {
+                          startBatchCleaning()
+                      }
+                  }
+              }
+
+              private fun scanCaches() {
+                  btnScan.isEnabled = false
+                  btnClean.isEnabled = false
+                  tvStatus.text = "در حال اسکن حافظه پنهان برنامه‌ها..."
+                  appsWithCache.clear()
+
+                  thread {
+                      val storageStatsManager = getSystemService(Context.STORAGE_STATS_SERVICE) as StorageStatsManager
+                      val packages = packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
+                      var totalCacheBytes = 0L
+
+                      for (app in packages) {
+                          if (app.packageName == packageName || app.packageName == "com.android.settings") continue
+                          try {
+                              val stats = storageStatsManager.queryStatsForPackage(
+                                  StorageManager.UUID_DEFAULT,
+                                  app.packageName,
+                                  Process.myUserHandle()
+                              )
+                              if (stats.cacheBytes > 100 * 1024) {
+                                  totalCacheBytes += stats.cacheBytes
+                                  appsWithCache.add(app.packageName)
+                              }
+                          } catch (e: Exception) { }
+                      }
+
+                      mainHandler.post {
+                          tvTotalCache.text = Formatter.formatFileSize(this, totalCacheBytes)
+                          tvAppCount.text = "${appsWithCache.size} برنامه دارای کش"
+                          btnScan.isEnabled = true
+
+                          if (appsWithCache.isNotEmpty()) {
+                              btnClean.isEnabled = true
+                              tvStatus.text = "محاسبه تمام شد. آماده پاک‌سازی خودکار!"
+                          } else {
+                              tvStatus.text = "تبلت شما کاملاً تمیز است!"
+                          }
+                      }
+                  }
+              }
+
+              private fun startBatchCleaning() {
+                  currentCleaningIndex = 0
+                  btnScan.isEnabled = false
+                  btnClean.isEnabled = false
+                  CacheClearService.onAppCleaned = {
+                      currentCleaningIndex++
+                      cleanNextApp()
+                  }
+                  cleanNextApp()
+              }
+
+              private fun cleanNextApp() {
+                  if (currentCleaningIndex >= appsWithCache.size) {
+                      CacheClearService.isCleaning = false
+                      tvTotalCache.text = "0 MB"
+                      tvAppCount.text = "0 برنامه"
+                      tvStatus.text = "پاک‌سازی تمامی برنامه‌ها با موفقیت انجام شد!"
+                      btnScan.isEnabled = true
+                      return
+                  }
+
+                  val pkg = appsWithCache[currentCleaningIndex]
+                  tvStatus.text = "در حال پاک‌سازی (${currentCleaningIndex + 1} از ${appsWithCache.size}):\n$pkg"
+                  CacheClearService.isCleaning = true
+
+                  val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                      data = Uri.parse("package:$pkg")
+                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                  }
+                  startActivity(intent)
+
+                  mainHandler.postDelayed({
+                      if (CacheClearService.isCleaning) {
+                          CacheClearService.isCleaning = false
+                          currentCleaningIndex++
+                          cleanNextApp()
+                      }
+                  }, 3500)
+              }
+
+              private fun hasUsageStatsPermission(): Boolean {
+                  val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+                  val mode = appOps.checkOpNoThrow(
+                      AppOpsManager.OPSTR_GET_USAGE_STATS,
+                      Process.myUid(),
+                      packageName
+                  )
+                  return mode == AppOpsManager.MODE_ALLOWED
+              }
+
+              private fun isAccessibilityEnabled(): Boolean {
+                  val prefString = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                  return prefString?.contains("$packageName/${CacheClearService::class.java.name}") == true
+              }
+          }
+          EOF
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle & Build APK
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Compile Debug APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LenovoCacheCleaner-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
